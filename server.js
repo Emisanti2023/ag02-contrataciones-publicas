@@ -785,28 +785,15 @@ const server = http.createServer(async (req, res) => {
   const pathname = url.pathname;
 
   try {
-    if (req.method === 'GET' && pathname === '/api/status') {
 
-if (
-  req.method === 'GET' &&
-  pathname === '/api/seace/ping'
-) {
-  try {
-    const resultado = await probarConexionSEACE();
+    // ---------------------------------------------------------
+    // STATUS GENERAL
+    // ---------------------------------------------------------
 
-    return sendJson(res, 200, resultado);
-
-  } catch (err) {
-    console.error('[SEACE] Error de prueba:', err);
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: err.message
-    });
-  }
-}
-
-      
+    if (
+      req.method === 'GET' &&
+      pathname === '/api/status'
+    ) {
       return sendJson(res, 200, {
         version: AGENT_VERSION,
         demoMode: DEMO_MODE,
@@ -814,34 +801,128 @@ if (
       });
     }
 
-    if (req.method === 'POST' && pathname === '/api/perfil') {
+
+    // ---------------------------------------------------------
+    // TEST DE CONEXIÓN SEACE
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'GET' &&
+      pathname === '/api/seace/ping'
+    ) {
+      try {
+
+        const resultado =
+          await probarConexionSEACE();
+
+        return sendJson(
+          res,
+          200,
+          resultado
+        );
+
+      } catch (err) {
+
+        console.error(
+          '[SEACE] Error de prueba:',
+          err
+        );
+
+        return sendJson(res, 500, {
+          ok: false,
+          error: err.message
+        });
+      }
+    }
+
+
+    // ---------------------------------------------------------
+    // PERFIL
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'POST' &&
+      pathname === '/api/perfil'
+    ) {
       const body = await readJsonBody(req);
       const result = await handlePerfil(body);
       return sendJson(res, 200, result);
     }
 
-    if (req.method === 'POST' && pathname === '/api/oportunidades') {
+
+    // ---------------------------------------------------------
+    // OPORTUNIDADES
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'POST' &&
+      pathname === '/api/oportunidades'
+    ) {
       const body = await readJsonBody(req);
-      const result = await handleOportunidades(body);
+      const result =
+        await handleOportunidades(body);
+
       return sendJson(res, 200, result);
     }
 
-    if (req.method === 'POST' && pathname === '/api/aprender') {
+
+    // ---------------------------------------------------------
+    // APRENDIZAJE
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'POST' &&
+      pathname === '/api/aprender'
+    ) {
       const body = await readJsonBody(req);
-      const result = await handleAprender(body);
+      const result =
+        await handleAprender(body);
+
       return sendJson(res, 200, result);
     }
+
+
+    // ---------------------------------------------------------
+    // ARCHIVOS ESTÁTICOS
+    // ---------------------------------------------------------
 
     if (req.method === 'GET') {
-      return serveStatic(req, res, pathname);
+      return serveStatic(
+        req,
+        res,
+        pathname
+      );
     }
 
-    res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
+
+    res.writeHead(
+      405,
+      {
+        'Content-Type':
+          'text/plain; charset=utf-8'
+      }
+    );
+
     res.end('Método no permitido');
+
+
   } catch (err) {
-    sendJson(res, 500, { error: err.message || 'Error interno' });
+
+    console.error(
+      '[SERVER] Error:',
+      err
+    );
+
+    sendJson(res, 500, {
+      error:
+        err.message ||
+        'Error interno'
+    });
+
   }
 });
+
+
 
 server.listen(PORT, () => {
   console.log(`AG02 — Contrataciones Públicas v${AGENT_VERSION} escuchando en http://localhost:${PORT}`);
