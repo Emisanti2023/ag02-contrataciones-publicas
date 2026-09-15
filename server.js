@@ -32,7 +32,26 @@ const PORT = Number(process.env.PORT) || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const DEMO_MODE = !OPENAI_API_KEY;
-const AGENT_VERSION = '0.1';
+
+const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN || '';
+const BROWSERLESS_ENDPOINT =
+  process.env.BROWSERLESS_ENDPOINT || 'wss://production-sfo.browserless.io';
+
+const BROWSERLESS_WS = BROWSERLESS_TOKEN
+  ? `${BROWSERLESS_ENDPOINT}?token=${encodeURIComponent(BROWSERLESS_TOKEN)}`
+  : '';
+
+const SEACE_YEAR = Number(process.env.SEACE_YEAR) || new Date().getFullYear();
+const SEACE_MAX_KEYWORDS = Math.min(
+  Math.max(Number(process.env.SEACE_MAX_KEYWORDS) || 4, 1),
+  10
+);
+const SEACE_MAX_PAGES = Math.min(
+  Math.max(Number(process.env.SEACE_MAX_PAGES) || 4, 1),
+  10
+);
+
+const AGENT_VERSION = '0.4-BROWSERLESS';
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -82,61 +101,590 @@ function splitList(str) {
 }
 
 
+async function conectarBrowserless() {
+  if (!BROWSERLESS_TOKEN) {
+    throw new Error(
+      'BROWSERLESS_TOKEN no está configurado en Render.'
+    );
+  }
+
+  console.log('[BROWSERLESS] Conectando navegador remoto...');
+
+  const browser = await chromium.connectOverCDP(
+    BROWSERLESS_WS,
+    { timeout: 60000 }
+  );
+
+  const contexts = browser.contexts();
+
+  if (!contexts.length) {
+    await browser.close().catch(() => {});
+    throw new Error(
+      'Browserless no entregó un contexto de navegador utilizable.'
+    );
+  }
+
+  return {
+    browser,
+    context: contexts[0]
+  };
+}
+
+
 async function probarConexionSEACE() {
   let browser = null;
 
   try {
-    console.log('[SEACE] Iniciando Chromium...');
+    const remote = await conectarBrowserless();
+    browser = remote.browser;
 
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox'
-      ]
-    });
-
-    const context = await browser.newContext({
-      locale: 'es-PE',
-      viewport: {
-        width: 1600,
-        height: 1000
-      }
-    });
-
-    const page = await context.newPage();
+    const page = await remote.context.newPage();
 
     page.setDefaultTimeout(60000);
 
-    console.log('[SEACE] Abriendo portal...');
+    console.log(
+      '[SEACE] Abriendo portal mediante Browserless...'
+    );
 
-    const response = await page.goto(SEACE_PUBLIC_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
+    const response = await page.goto(
+      SEACE_PUBLIC_URL,
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      }
+    );
+
+    const statusHttp =
+      response ? response.status() : null;
 
     const title = await page.title();
 
-    const texto = await page.locator('body')
+    const texto = await page
+      .locator('body')
       .innerText()
       .catch(() => '');
 
     const buscadorVisible =
-      texto.includes('Buscador de Procedimientos de Selección');
-
-    console.log('[SEACE] Portal cargado correctamente.');
+      texto.includes(
+        'Buscador de Procedimientos de Selección'
+      );
 
     return {
-      ok: true,
-      statusHttp: response ? response.status() : null,
+      ok:
+        statusHttp === 200 &&
+        buscadorVisible,
+      statusHttp,
       titulo: title,
       url: page.url(),
-      buscadorProcedimientosVisible: buscadorVisible
+      buscadorProcedimientosVisible:
+        buscadorVisible,
+      navegador: 'Browserless Cloud'
     };
 
   } finally {
     if (browser) {
-      await browser.close().catch(() => {});
+      await browser.close()
+        .catch(() => {});
+    }
+  }
+}
+
+
+function cleanSeaceText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
+function parseMontoSeace(value) {
+  const texto = cleanSeaceText(value);
+
+  if (
+    !texto ||
+    texto === '-' ||
+    texto === '---'
+  ) {
+    return null;
+  }
+
+  const limpio = texto
+    .replace(/S\/\.?/gi, '')
+    .replace(/,/g, '')
+    .replace(/[^\d.-]/g, '');
+
+  const numero = Number(limpio);
+
+  return Number.isFinite(numero)
+    ? numero
+    : null;
+}
+
+
+function fechaSeaceAIso(value) {
+  const match = cleanSeaceText(value)
+    .match(/(\d{2})\/(\d{2})\/(\d{4})/);
+
+  if (!match) {
+    return 'NO_VERIFICADO';
+  }
+
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+
+async function firstVisible(locator) {
+  const count = await locator.count();
+
+  for (let i = 0; i < count; i++) {
+    const item = locator.nth(i);
+
+    if (
+      await item.isVisible()
+        .catch(() => false)
+    ) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+
+async function abrirBuscadorProcedimientos(page) {
+  const links = page.locator('a').filter({
+    hasText:
+      'Buscador de Procedimientos de Selección'
+  });
+
+  let tab = await firstVisible(links);
+
+  if (!tab) {
+    tab = await firstVisible(
+      page.getByText(
+        'Buscador de Procedimientos de Selección',
+        { exact: false }
+      )
+    );
+  }
+
+  if (!tab) {
+    throw new Error(
+      'No se encontró la pestaña de Procedimientos de Selección.'
+    );
+  }
+
+  await tab.click();
+  await page.waitForTimeout(1500);
+}
+
+
+async function encontrarCampoDescripcion(page) {
+  const byId = page.locator(
+    'input[id$="descripcionObjeto"], textarea[id$="descripcionObjeto"]'
+  );
+
+  let field = await firstVisible(byId);
+
+  if (field) return field;
+
+  const rows = page.locator('tr').filter({
+    hasText: 'Descripción del Objeto'
+  });
+
+  const count = await rows.count();
+
+  for (let i = 0; i < count; i++) {
+    field = await firstVisible(
+      rows.nth(i).locator('input, textarea')
+    );
+
+    if (field) return field;
+  }
+
+  return null;
+}
+
+
+async function encontrarCampoAnio(page) {
+  return firstVisible(
+    page.locator(
+      'input[id$="anioConvocatoria_input"]'
+    )
+  );
+}
+
+
+async function encontrarBotonBuscar(page) {
+  let button = await firstVisible(
+    page.locator('[id$="btnBuscarSel"]')
+  );
+
+  if (button) return button;
+
+  button = await firstVisible(
+    page.locator(
+      'button, a, input[type="submit"]'
+    ).filter({
+      hasText: 'Buscar'
+    })
+  );
+
+  return button;
+}
+
+
+async function encontrarTablaResultados(page) {
+  const tables = page.locator('table');
+  const count = await tables.count();
+
+  for (let i = 0; i < count; i++) {
+    const table = tables.nth(i);
+
+    const text = await table
+      .innerText()
+      .catch(() => '');
+
+    if (
+      text.includes('Nomenclatura') &&
+      text.includes('Descripción de Objeto') &&
+      text.includes('Versión SEACE')
+    ) {
+      return table;
+    }
+  }
+
+  return null;
+}
+
+
+async function extraerPaginaSEACE(page, keyword) {
+  const table =
+    await encontrarTablaResultados(page);
+
+  if (!table) {
+    const body = await page
+      .locator('body')
+      .innerText()
+      .catch(() => '');
+
+    if (
+      normalize(body)
+        .includes('no se encontraron datos')
+    ) {
+      return [];
+    }
+
+    throw new Error(
+      'No se encontró la tabla de resultados de SEACE.'
+    );
+  }
+
+  const rows = table.locator('tr');
+  const rowCount = await rows.count();
+
+  const oportunidades = [];
+
+  for (let i = 0; i < rowCount; i++) {
+    const row = rows.nth(i);
+
+    const cells = await row
+      .locator('td')
+      .allTextContents()
+      .catch(() => []);
+
+    const values =
+      cells.map(cleanSeaceText);
+
+    if (values.length < 12) continue;
+
+    if (
+      normalize(values.join(' '))
+        .includes('no se encontraron datos')
+    ) {
+      continue;
+    }
+
+    const links = await row
+      .locator('a')
+      .evaluateAll(elements =>
+        elements.map(a => ({
+          href: a.href || '',
+          title:
+            a.getAttribute('title') || ''
+        }))
+      )
+      .catch(() => []);
+
+    const detailLink = links.find(
+      x =>
+        x.href &&
+        !x.href.startsWith('javascript:')
+    );
+
+    const entidad =
+      values[1] || 'NO_VERIFICADO';
+
+    const proceso =
+      values[3] || 'NO_VERIFICADO';
+
+    oportunidades.push({
+      id:
+        `seace-${Buffer.from(
+          `${entidad}|${proceso}`
+        )
+          .toString('base64url')
+          .slice(0, 40)}`,
+      demo: false,
+      fuente: 'SEACE',
+      keyword_busqueda: keyword,
+      entidad,
+      region: 'NO_VERIFICADO',
+      proceso,
+      objeto:
+        values[5] || 'NO_VERIFICADO',
+      descripcion:
+        values[6] || 'NO_VERIFICADO',
+      monto:
+        parseMontoSeace(values[9]),
+      moneda:
+        values[10] || 'NO_VERIFICADO',
+      fecha_publicacion:
+        fechaSeaceAIso(values[2]),
+      fecha_limite:
+        'NO_VERIFICADO',
+      restricciones: [],
+      riesgos: [],
+      codigo_snip:
+        values[7] || null,
+      cui:
+        values[8] || null,
+      version_seace:
+        values[11] || 'NO_VERIFICADO',
+      url:
+        detailLink
+          ? detailLink.href
+          : SEACE_PUBLIC_URL
+    });
+  }
+
+  return oportunidades;
+}
+
+
+async function avanzarPaginaSEACE(page) {
+  const candidates =
+    page.locator('.ui-paginator-next');
+
+  const count = await candidates.count();
+
+  for (let i = 0; i < count; i++) {
+    const next = candidates.nth(i);
+
+    const className =
+      await next.getAttribute('class') || '';
+
+    const visible =
+      await next.isVisible()
+        .catch(() => false);
+
+    if (
+      visible &&
+      !className.includes(
+        'ui-state-disabled'
+      )
+    ) {
+      await next.click();
+      await page.waitForTimeout(1500);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+async function buscarKeywordSEACE(
+  page,
+  keyword,
+  anio = SEACE_YEAR
+) {
+  console.log(
+    `[SEACE] Buscando "${keyword}" - ${anio}`
+  );
+
+  const response = await page.goto(
+    SEACE_PUBLIC_URL,
+    {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    }
+  );
+
+  const status =
+    response ? response.status() : null;
+
+  if (status !== 200) {
+    throw new Error(
+      `SEACE respondió HTTP ${status}.`
+    );
+  }
+
+  await abrirBuscadorProcedimientos(page);
+
+  const description =
+    await encontrarCampoDescripcion(page);
+
+  if (!description) {
+    throw new Error(
+      'No se encontró el campo Descripción del Objeto.'
+    );
+  }
+
+  await description.fill(keyword);
+
+  const yearField =
+    await encontrarCampoAnio(page);
+
+  if (yearField) {
+    await yearField
+      .fill(String(anio))
+      .catch(() => {});
+  }
+
+  const button =
+    await encontrarBotonBuscar(page);
+
+  if (!button) {
+    throw new Error(
+      'No se encontró el botón Buscar.'
+    );
+  }
+
+  await button.click();
+  await page.waitForTimeout(3000);
+
+  const resultados = [];
+
+  let pageNumber = 1;
+
+  while (
+    pageNumber <= SEACE_MAX_PAGES
+  ) {
+    const pageResults =
+      await extraerPaginaSEACE(
+        page,
+        keyword
+      );
+
+    resultados.push(...pageResults);
+
+    console.log(
+      `[SEACE] "${keyword}" página ${pageNumber}: ${pageResults.length} registros.`
+    );
+
+    const advanced =
+      await avanzarPaginaSEACE(page);
+
+    if (!advanced) break;
+
+    pageNumber++;
+  }
+
+  return resultados;
+}
+
+
+function keywordsParaSEACE(perfil) {
+  const raw = [
+    ...(Array.isArray(perfil.keywords)
+      ? perfil.keywords
+      : []),
+    ...(Array.isArray(perfil.servicios)
+      ? perfil.servicios
+      : [])
+  ];
+
+  const result = [];
+  const seen = new Set();
+
+  for (const item of raw) {
+    const value = String(item || '').trim();
+
+    if (!value) continue;
+
+    const key = normalize(value);
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(value);
+
+    if (
+      result.length >= SEACE_MAX_KEYWORDS
+    ) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+
+async function buscarOportunidadesSEACE(
+  perfil,
+  loteMaximo
+) {
+  const keywords =
+    keywordsParaSEACE(perfil);
+
+  if (!keywords.length) {
+    throw new Error(
+      'El perfil no contiene palabras clave o servicios para consultar SEACE.'
+    );
+  }
+
+  let browser = null;
+
+  try {
+    const remote =
+      await conectarBrowserless();
+
+    browser = remote.browser;
+
+    const page =
+      await remote.context.newPage();
+
+    page.setDefaultTimeout(60000);
+
+    const todas = [];
+
+    for (const keyword of keywords) {
+      const resultados =
+        await buscarKeywordSEACE(
+          page,
+          keyword,
+          SEACE_YEAR
+        );
+
+      todas.push(...resultados);
+
+      if (
+        dedupeOportunidades(todas)
+          .length >= loteMaximo * 3
+      ) {
+        break;
+      }
+
+      await page.waitForTimeout(1000);
+    }
+
+    return dedupeOportunidades(todas);
+
+  } finally {
+    if (browser) {
+      await browser.close()
+        .catch(() => {});
     }
   }
 }
@@ -298,101 +846,162 @@ function demoOportunidades() {
 
 async function handleOportunidades(body) {
   const perfil = body.perfil || {};
+
   const loteMaximo = Math.min(
-    Math.max(Number(perfil.loteMaximo) || 10, 1),
+    Math.max(
+      Number(perfil.loteMaximo) || 10,
+      1
+    ),
     20
   );
 
   let crudas = [];
   let warning = null;
+  let fuenteBusqueda = null;
 
-  // En producción NO se generan oportunidades ficticias
-  if (DEMO_MODE) {
-    return {
-      oportunidades: [],
-      descartadas: [],
-      demoMode: true,
-      warning: 'No hay una OPENAI_API_KEY configurada. No se mostrarán oportunidades ficticias.'
-    };
-  }
-
-  try {
-    const prompt = buildOportunidadesPrompt(perfil, loteMaximo);
-
-    console.log('[AG02] Iniciando búsqueda real de oportunidades...');
-
-    const aiResult = await callOpenAIJson(prompt, {
-      webSearch: true
-    });
-
-    if (
-      aiResult &&
-      Array.isArray(aiResult.oportunidades) &&
-      aiResult.oportunidades.length > 0
-    ) {
-
-      crudas = aiResult.oportunidades
-        .slice(0, loteMaximo * 2)
-        .map((op, i) => normalizeAiOportunidad(op, i));
-
+  if (BROWSERLESS_TOKEN) {
+    try {
       console.log(
-        `[AG02] ${crudas.length} oportunidades reales recibidas.`
+        '[AG02] Consultando SEACE mediante Browserless...'
       );
 
-    } else {
+      crudas =
+        await buscarOportunidadesSEACE(
+          perfil,
+          loteMaximo
+        );
 
-      console.log('[AG02] La búsqueda no devolvió oportunidades.');
+      fuenteBusqueda =
+        'SEACE_BROWSERLESS';
 
-      return {
-        oportunidades: [],
-        descartadas: [],
-        demoMode: false,
-        warning: 'La búsqueda finalizó correctamente, pero no se encontraron oportunidades reales que coincidan con el perfil.'
-      };
+      console.log(
+        `[AG02] SEACE devolvió ${crudas.length} oportunidades únicas.`
+      );
+
+    } catch (err) {
+      console.error(
+        '[AG02] Falló SEACE/Browserless:',
+        err
+      );
+
+      warning =
+        `No se pudo consultar SEACE mediante Browserless: ${err.message}`;
     }
+  }
 
-  } catch (err) {
+  if (
+    crudas.length === 0 &&
+    !DEMO_MODE
+  ) {
+    try {
+      console.log(
+        '[AG02] Usando OpenAI web_search como respaldo...'
+      );
 
-    console.error(
-      '[AG02] Error realizando búsqueda real:',
-      err
-    );
+      const prompt =
+        buildOportunidadesPrompt(
+          perfil,
+          loteMaximo
+        );
 
+      const aiResult =
+        await callOpenAIJson(
+          prompt,
+          { webSearch: true }
+        );
+
+      if (
+        aiResult &&
+        Array.isArray(
+          aiResult.oportunidades
+        ) &&
+        aiResult.oportunidades.length > 0
+      ) {
+        crudas =
+          aiResult.oportunidades
+            .slice(0, loteMaximo * 2)
+            .map(
+              (op, i) =>
+                normalizeAiOportunidad(
+                  op,
+                  i
+                )
+            );
+
+        fuenteBusqueda =
+          'OPENAI_WEB';
+      }
+
+    } catch (err) {
+      console.error(
+        '[AG02] Falló búsqueda de respaldo:',
+        err
+      );
+
+      warning = warning
+        ? `${warning} | OpenAI: ${err.message}`
+        : `No se pudo consultar OpenAI: ${err.message}`;
+    }
+  }
+
+  if (crudas.length === 0) {
     return {
       oportunidades: [],
       descartadas: [],
       demoMode: false,
-      warning: `No se pudo realizar la búsqueda real: ${err.message}`
+      fuenteBusqueda:
+        fuenteBusqueda || 'SIN_RESULTADOS',
+      warning:
+        warning ||
+        'No se encontraron oportunidades utilizables.'
     };
   }
 
-  // Eliminar oportunidades duplicadas
-  crudas = dedupeOportunidades(crudas);
+  crudas =
+    dedupeOportunidades(crudas);
 
-  // Calcular score
-  const scored = crudas.map(op =>
-    scoreOportunidad(perfil, op)
+  const scored =
+    crudas.map(op =>
+      scoreOportunidad(
+        perfil,
+        op
+      )
+    );
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score
   );
 
-  scored.sort((a, b) => b.score - a.score);
+  const enviables =
+    scored
+      .filter(
+        op =>
+          op.prioridad !==
+          'DESCARTABLE'
+      )
+      .slice(
+        0,
+        loteMaximo
+      );
 
-  // Separar oportunidades relevantes y descartables
-  const enviables = scored
-    .filter(op => op.prioridad !== 'DESCARTABLE')
-    .slice(0, loteMaximo);
-
-  const descartadas = scored.filter(
-    op => op.prioridad === 'DESCARTABLE'
-  );
+  const descartadas =
+    scored.filter(
+      op =>
+        op.prioridad ===
+        'DESCARTABLE'
+    );
 
   console.log(
     `[AG02] Resultado final: ${enviables.length} oportunidades, ${descartadas.length} descartadas.`
   );
 
   return {
-    oportunidades: enviables,
+    oportunidades:
+      enviables,
     descartadas,
     demoMode: false,
+    fuenteBusqueda,
     warning
   };
 }
@@ -797,7 +1406,9 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         version: AGENT_VERSION,
         demoMode: DEMO_MODE,
-        model: DEMO_MODE ? null : OPENAI_MODEL
+        model: DEMO_MODE ? null : OPENAI_MODEL,
+        browserlessConfigured: Boolean(BROWSERLESS_TOKEN),
+        seaceYear: SEACE_YEAR
       });
     }
 
