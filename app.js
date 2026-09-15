@@ -264,7 +264,7 @@ function renderLeadsTable() {
     const plazo = dias == null ? 'NO_VERIFICADO' : (dias < 0 ? 'Vencido' : `${dias} día(s)`);
     return `
       <tr>
-        <td><div class="lead-name">${esc(op.entidad)}${op.demo ? '<span class="demo-flag">DEMO</span>' : ''}</div><div class="lead-sub">${esc(op.region)} · ${esc(op.fuente)}</div></td>
+        <td><div class="lead-name">${esc(op.entidad)}}</div><div class="lead-sub">${esc(op.region)} · ${esc(op.fuente)}</div></td>
         <td>${esc(op.objeto)}<div class="lead-sub">${esc(op.proceso)}</div></td>
         <td>${esc(formatMonto(op.monto))}</td>
         <td>${esc(plazo)}</td>
@@ -352,9 +352,9 @@ function renderValidation() {
   content.innerHTML = `
     <div class="lead-detail-head">
       <div>
-        <h3>${esc(op.entidad)}${op.demo ? '<span class="demo-flag">DEMO</span>' : ''}</h3>
+        <h3>${esc(op.entidad)}</h3>
         <p>${esc(op.proceso)} · ${esc(op.region)}</p>
-        <div class="lead-meta">Publicado: ${esc(op.fecha_publicacion)} · Plazo: ${esc(plazoTexto)} · Fuente: ${esc(op.fuente)}${op.avisoDemo ? ` · ${esc(op.avisoDemo)}` : ''}</div>
+        <div class="lead-meta">Publicado: ${esc(op.fecha_publicacion)} · Plazo: ${esc(plazoTexto)} · Fuente: ${esc(op.fuente)}</div>
       </div>
       <div class="score-box">
         <strong class="score-pill score-${cls}">${op.score}</strong>
