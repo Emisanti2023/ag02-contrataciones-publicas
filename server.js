@@ -20,11 +20,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright-core');
+const crypto = require('crypto');
 
 const ROOT = __dirname;
-const SEACE_PUBLIC_URL =
-  'https://prod2.seace.gob.pe/seacebus-uiwd-pub/buscadorPublico/buscadorPublico.xhtml';
 
 loadEnvFile(path.join(ROOT, '.env'));
 
@@ -32,26 +30,19 @@ const PORT = Number(process.env.PORT) || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const DEMO_MODE = !OPENAI_API_KEY;
+const AGENT_VERSION = '0.4-SEACE-LOCAL-WEB';
 
-const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN || '';
-const BROWSERLESS_ENDPOINT =
-  process.env.BROWSERLESS_ENDPOINT || 'wss://production-sfo.browserless.io';
+const SEACE_IMPORT_TOKEN = process.env.SEACE_IMPORT_TOKEN || '';
+const SEACE_CACHE_FILE = path.join(ROOT, 'seace-cache.json');
 
-const BROWSERLESS_WS = BROWSERLESS_TOKEN
-  ? `${BROWSERLESS_ENDPOINT}?token=${encodeURIComponent(BROWSERLESS_TOKEN)}`
-  : '';
-
-const SEACE_YEAR = Number(process.env.SEACE_YEAR) || new Date().getFullYear();
-const SEACE_MAX_KEYWORDS = Math.min(
-  Math.max(Number(process.env.SEACE_MAX_KEYWORDS) || 4, 1),
-  10
-);
-const SEACE_MAX_PAGES = Math.min(
-  Math.max(Number(process.env.SEACE_MAX_PAGES) || 4, 1),
-  10
-);
-
-const AGENT_VERSION = '0.4-BROWSERLESS';
+const SEACE_STORE = {
+  importedAt: null,
+  generatedAt: null,
+  source: 'SEACE_LOCAL_AGENT',
+  year: null,
+  keywords: [],
+  oportunidades: []
+};
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -101,594 +92,192 @@ function splitList(str) {
 }
 
 
-async function conectarBrowserless() {
-  if (!BROWSERLESS_TOKEN) {
-    throw new Error(
-      'BROWSERLESS_TOKEN no está configurado en Render.'
-    );
+
+
+function safeTokenEqual(received, expected) {
+  const a = Buffer.from(String(received || ''), 'utf8');
+  const b = Buffer.from(String(expected || ''), 'utf8');
+
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) {
+    return false;
   }
 
-  console.log('[BROWSERLESS] Conectando navegador remoto...');
+  return crypto.timingSafeEqual(a, b);
+}
 
-  const browser = await chromium.connectOverCDP(
-    BROWSERLESS_WS,
-    { timeout: 60000 }
+function validarTokenImportacionSEACE(req) {
+  if (!SEACE_IMPORT_TOKEN) return false;
+
+  const recibido = req.headers['x-ag02-token'];
+
+  return safeTokenEqual(
+    recibido,
+    SEACE_IMPORT_TOKEN
   );
+}
 
-  const contexts = browser.contexts();
-
-  if (!contexts.length) {
-    await browser.close().catch(() => {});
-    throw new Error(
-      'Browserless no entregó un contexto de navegador utilizable.'
-    );
-  }
-
+function normalizarOportunidadImportadaSEACE(op, i) {
   return {
-    browser,
-    context: contexts[0]
+    id:
+      op.id ||
+      `seace-import-${Date.now()}-${i}`,
+
+    demo: false,
+
+    fuente: 'SEACE',
+
+    url:
+      op.url ||
+      'https://prod2.seace.gob.pe/seacebus-uiwd-pub/buscadorPublico/buscadorPublico.xhtml',
+
+    entidad:
+      op.entidad ||
+      'NO_VERIFICADO',
+
+    region:
+      op.region ||
+      'NO_VERIFICADO',
+
+    proceso:
+      op.proceso ||
+      'NO_VERIFICADO',
+
+    objeto:
+      op.objeto ||
+      'NO_VERIFICADO',
+
+    descripcion:
+      op.descripcion ||
+      'NO_VERIFICADO',
+
+    monto:
+      op.monto == null ||
+      op.monto === ''
+        ? null
+        : Number(op.monto),
+
+    moneda:
+      op.moneda ||
+      'NO_VERIFICADO',
+
+    fecha_publicacion:
+      op.fecha_publicacion ||
+      'NO_VERIFICADO',
+
+    fecha_limite:
+      op.fecha_limite ||
+      'NO_VERIFICADO',
+
+    restricciones:
+      Array.isArray(op.restricciones)
+        ? op.restricciones
+        : [],
+
+    riesgos:
+      Array.isArray(op.riesgos)
+        ? op.riesgos
+        : [],
+
+    keyword_busqueda:
+      op.keyword_busqueda ||
+      null,
+
+    keywords_encontradas:
+      Array.isArray(op.keywords_encontradas)
+        ? op.keywords_encontradas
+        : (
+            op.keyword_busqueda
+              ? [op.keyword_busqueda]
+              : []
+          ),
+
+    codigo_snip:
+      op.codigo_snip ||
+      null,
+
+    cui:
+      op.cui ||
+      null,
+
+    version_seace:
+      op.version_seace ||
+      'NO_VERIFICADO'
   };
 }
 
-
-async function probarConexionSEACE() {
-  let browser = null;
-
+function cargarCacheSEACE() {
   try {
-    const remote = await conectarBrowserless();
-    browser = remote.browser;
+    if (!fs.existsSync(SEACE_CACHE_FILE)) return;
 
-    const page = await remote.context.newPage();
-
-    page.setDefaultTimeout(60000);
-
-    console.log(
-      '[SEACE] Abriendo portal mediante Browserless...'
-    );
-
-    const response = await page.goto(
-      SEACE_PUBLIC_URL,
-      {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000
-      }
-    );
-
-    const statusHttp =
-      response ? response.status() : null;
-
-    const title = await page.title();
-
-    const texto = await page
-      .locator('body')
-      .innerText()
-      .catch(() => '');
-
-    const buscadorVisible =
-      texto.includes(
-        'Buscador de Procedimientos de Selección'
+    const raw =
+      fs.readFileSync(
+        SEACE_CACHE_FILE,
+        'utf8'
       );
 
-    return {
-      ok:
-        statusHttp === 200 &&
-        buscadorVisible,
-      statusHttp,
-      titulo: title,
-      url: page.url(),
-      buscadorProcedimientosVisible:
-        buscadorVisible,
-      navegador: 'Browserless Cloud'
-    };
-
-  } finally {
-    if (browser) {
-      await browser.close()
-        .catch(() => {});
-    }
-  }
-}
-
-
-function cleanSeaceText(value) {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-
-function parseMontoSeace(value) {
-  const texto = cleanSeaceText(value);
-
-  if (
-    !texto ||
-    texto === '-' ||
-    texto === '---'
-  ) {
-    return null;
-  }
-
-  const limpio = texto
-    .replace(/S\/\.?/gi, '')
-    .replace(/,/g, '')
-    .replace(/[^\d.-]/g, '');
-
-  const numero = Number(limpio);
-
-  return Number.isFinite(numero)
-    ? numero
-    : null;
-}
-
-
-function fechaSeaceAIso(value) {
-  const match = cleanSeaceText(value)
-    .match(/(\d{2})\/(\d{2})\/(\d{4})/);
-
-  if (!match) {
-    return 'NO_VERIFICADO';
-  }
-
-  return `${match[3]}-${match[2]}-${match[1]}`;
-}
-
-
-async function firstVisible(locator) {
-  const count = await locator.count();
-
-  for (let i = 0; i < count; i++) {
-    const item = locator.nth(i);
+    const data = JSON.parse(raw);
 
     if (
-      await item.isVisible()
-        .catch(() => false)
+      !data ||
+      !Array.isArray(data.oportunidades)
     ) {
-      return item;
-    }
-  }
-
-  return null;
-}
-
-
-async function abrirBuscadorProcedimientos(page) {
-  const links = page.locator('a').filter({
-    hasText:
-      'Buscador de Procedimientos de Selección'
-  });
-
-  let tab = await firstVisible(links);
-
-  if (!tab) {
-    tab = await firstVisible(
-      page.getByText(
-        'Buscador de Procedimientos de Selección',
-        { exact: false }
-      )
-    );
-  }
-
-  if (!tab) {
-    throw new Error(
-      'No se encontró la pestaña de Procedimientos de Selección.'
-    );
-  }
-
-  await tab.click();
-  await page.waitForTimeout(1500);
-}
-
-
-async function encontrarCampoDescripcion(page) {
-  const byId = page.locator(
-    'input[id$="descripcionObjeto"], textarea[id$="descripcionObjeto"]'
-  );
-
-  let field = await firstVisible(byId);
-
-  if (field) return field;
-
-  const rows = page.locator('tr').filter({
-    hasText: 'Descripción del Objeto'
-  });
-
-  const count = await rows.count();
-
-  for (let i = 0; i < count; i++) {
-    field = await firstVisible(
-      rows.nth(i).locator('input, textarea')
-    );
-
-    if (field) return field;
-  }
-
-  return null;
-}
-
-
-async function encontrarCampoAnio(page) {
-  return firstVisible(
-    page.locator(
-      'input[id$="anioConvocatoria_input"]'
-    )
-  );
-}
-
-
-async function encontrarBotonBuscar(page) {
-  let button = await firstVisible(
-    page.locator('[id$="btnBuscarSel"]')
-  );
-
-  if (button) return button;
-
-  button = await firstVisible(
-    page.locator(
-      'button, a, input[type="submit"]'
-    ).filter({
-      hasText: 'Buscar'
-    })
-  );
-
-  return button;
-}
-
-
-async function encontrarTablaResultados(page) {
-  const tables = page.locator('table');
-  const count = await tables.count();
-
-  for (let i = 0; i < count; i++) {
-    const table = tables.nth(i);
-
-    const text = await table
-      .innerText()
-      .catch(() => '');
-
-    if (
-      text.includes('Nomenclatura') &&
-      text.includes('Descripción de Objeto') &&
-      text.includes('Versión SEACE')
-    ) {
-      return table;
-    }
-  }
-
-  return null;
-}
-
-
-async function extraerPaginaSEACE(page, keyword) {
-  const table =
-    await encontrarTablaResultados(page);
-
-  if (!table) {
-    const body = await page
-      .locator('body')
-      .innerText()
-      .catch(() => '');
-
-    if (
-      normalize(body)
-        .includes('no se encontraron datos')
-    ) {
-      return [];
+      return;
     }
 
-    throw new Error(
-      'No se encontró la tabla de resultados de SEACE.'
-    );
-  }
+    SEACE_STORE.importedAt =
+      data.importedAt || null;
 
-  const rows = table.locator('tr');
-  const rowCount = await rows.count();
+    SEACE_STORE.generatedAt =
+      data.generatedAt || null;
 
-  const oportunidades = [];
+    SEACE_STORE.source =
+      data.source ||
+      'SEACE_LOCAL_AGENT';
 
-  for (let i = 0; i < rowCount; i++) {
-    const row = rows.nth(i);
+    SEACE_STORE.year =
+      data.year || null;
 
-    const cells = await row
-      .locator('td')
-      .allTextContents()
-      .catch(() => []);
+    SEACE_STORE.keywords =
+      Array.isArray(data.keywords)
+        ? data.keywords
+        : [];
 
-    const values =
-      cells.map(cleanSeaceText);
-
-    if (values.length < 12) continue;
-
-    if (
-      normalize(values.join(' '))
-        .includes('no se encontraron datos')
-    ) {
-      continue;
-    }
-
-    const links = await row
-      .locator('a')
-      .evaluateAll(elements =>
-        elements.map(a => ({
-          href: a.href || '',
-          title:
-            a.getAttribute('title') || ''
-        }))
-      )
-      .catch(() => []);
-
-    const detailLink = links.find(
-      x =>
-        x.href &&
-        !x.href.startsWith('javascript:')
-    );
-
-    const entidad =
-      values[1] || 'NO_VERIFICADO';
-
-    const proceso =
-      values[3] || 'NO_VERIFICADO';
-
-    oportunidades.push({
-      id:
-        `seace-${Buffer.from(
-          `${entidad}|${proceso}`
-        )
-          .toString('base64url')
-          .slice(0, 40)}`,
-      demo: false,
-      fuente: 'SEACE',
-      keyword_busqueda: keyword,
-      entidad,
-      region: 'NO_VERIFICADO',
-      proceso,
-      objeto:
-        values[5] || 'NO_VERIFICADO',
-      descripcion:
-        values[6] || 'NO_VERIFICADO',
-      monto:
-        parseMontoSeace(values[9]),
-      moneda:
-        values[10] || 'NO_VERIFICADO',
-      fecha_publicacion:
-        fechaSeaceAIso(values[2]),
-      fecha_limite:
-        'NO_VERIFICADO',
-      restricciones: [],
-      riesgos: [],
-      codigo_snip:
-        values[7] || null,
-      cui:
-        values[8] || null,
-      version_seace:
-        values[11] || 'NO_VERIFICADO',
-      url:
-        detailLink
-          ? detailLink.href
-          : SEACE_PUBLIC_URL
-    });
-  }
-
-  return oportunidades;
-}
-
-
-async function avanzarPaginaSEACE(page) {
-  const candidates =
-    page.locator('.ui-paginator-next');
-
-  const count = await candidates.count();
-
-  for (let i = 0; i < count; i++) {
-    const next = candidates.nth(i);
-
-    const className =
-      await next.getAttribute('class') || '';
-
-    const visible =
-      await next.isVisible()
-        .catch(() => false);
-
-    if (
-      visible &&
-      !className.includes(
-        'ui-state-disabled'
-      )
-    ) {
-      await next.click();
-      await page.waitForTimeout(1500);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-
-async function buscarKeywordSEACE(
-  page,
-  keyword,
-  anio = SEACE_YEAR
-) {
-  console.log(
-    `[SEACE] Buscando "${keyword}" - ${anio}`
-  );
-
-  const response = await page.goto(
-    SEACE_PUBLIC_URL,
-    {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    }
-  );
-
-  const status =
-    response ? response.status() : null;
-
-  if (status !== 200) {
-    throw new Error(
-      `SEACE respondió HTTP ${status}.`
-    );
-  }
-
-  await abrirBuscadorProcedimientos(page);
-
-  const description =
-    await encontrarCampoDescripcion(page);
-
-  if (!description) {
-    throw new Error(
-      'No se encontró el campo Descripción del Objeto.'
-    );
-  }
-
-  await description.fill(keyword);
-
-  const yearField =
-    await encontrarCampoAnio(page);
-
-  if (yearField) {
-    await yearField
-      .fill(String(anio))
-      .catch(() => {});
-  }
-
-  const button =
-    await encontrarBotonBuscar(page);
-
-  if (!button) {
-    throw new Error(
-      'No se encontró el botón Buscar.'
-    );
-  }
-
-  await button.click();
-  await page.waitForTimeout(3000);
-
-  const resultados = [];
-
-  let pageNumber = 1;
-
-  while (
-    pageNumber <= SEACE_MAX_PAGES
-  ) {
-    const pageResults =
-      await extraerPaginaSEACE(
-        page,
-        keyword
-      );
-
-    resultados.push(...pageResults);
+    SEACE_STORE.oportunidades =
+      data.oportunidades;
 
     console.log(
-      `[SEACE] "${keyword}" página ${pageNumber}: ${pageResults.length} registros.`
+      `[SEACE CACHE] ${SEACE_STORE.oportunidades.length} oportunidades recuperadas.`
     );
 
-    const advanced =
-      await avanzarPaginaSEACE(page);
-
-    if (!advanced) break;
-
-    pageNumber++;
-  }
-
-  return resultados;
-}
-
-
-function keywordsParaSEACE(perfil) {
-  const raw = [
-    ...(Array.isArray(perfil.keywords)
-      ? perfil.keywords
-      : []),
-    ...(Array.isArray(perfil.servicios)
-      ? perfil.servicios
-      : [])
-  ];
-
-  const result = [];
-  const seen = new Set();
-
-  for (const item of raw) {
-    const value = String(item || '').trim();
-
-    if (!value) continue;
-
-    const key = normalize(value);
-
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    result.push(value);
-
-    if (
-      result.length >= SEACE_MAX_KEYWORDS
-    ) {
-      break;
-    }
-  }
-
-  return result;
-}
-
-
-async function buscarOportunidadesSEACE(
-  perfil,
-  loteMaximo
-) {
-  const keywords =
-    keywordsParaSEACE(perfil);
-
-  if (!keywords.length) {
-    throw new Error(
-      'El perfil no contiene palabras clave o servicios para consultar SEACE.'
+  } catch (err) {
+    console.error(
+      '[SEACE CACHE] No se pudo recuperar la caché:',
+      err.message
     );
   }
+}
 
-  let browser = null;
-
+function guardarCacheSEACE() {
   try {
-    const remote =
-      await conectarBrowserless();
+    fs.writeFileSync(
+      SEACE_CACHE_FILE,
+      JSON.stringify(
+        SEACE_STORE,
+        null,
+        2
+      ),
+      'utf8'
+    );
 
-    browser = remote.browser;
-
-    const page =
-      await remote.context.newPage();
-
-    page.setDefaultTimeout(60000);
-
-    const todas = [];
-
-    for (const keyword of keywords) {
-      const resultados =
-        await buscarKeywordSEACE(
-          page,
-          keyword,
-          SEACE_YEAR
-        );
-
-      todas.push(...resultados);
-
-      if (
-        dedupeOportunidades(todas)
-          .length >= loteMaximo * 3
-      ) {
-        break;
-      }
-
-      await page.waitForTimeout(1000);
-    }
-
-    return dedupeOportunidades(todas);
-
-  } finally {
-    if (browser) {
-      await browser.close()
-        .catch(() => {});
-    }
+  } catch (err) {
+    console.error(
+      '[SEACE CACHE] No se pudo escribir la caché:',
+      err.message
+    );
   }
 }
 
+cargarCacheSEACE();
 
 
 // ---------------------------------------------------------------------------
@@ -859,50 +448,51 @@ async function handleOportunidades(body) {
   let warning = null;
   let fuenteBusqueda = null;
 
-  if (BROWSERLESS_TOKEN) {
-    try {
-      console.log(
-        '[AG02] Consultando SEACE mediante Browserless...'
+  // -------------------------------------------------------
+  // 1. FUENTE PRINCIPAL: datos reales importados desde SEACE
+  // -------------------------------------------------------
+
+  if (SEACE_STORE.oportunidades.length > 0) {
+    crudas =
+      SEACE_STORE.oportunidades.map(
+        op => ({ ...op })
       );
 
-      crudas =
-        await buscarOportunidadesSEACE(
-          perfil,
-          loteMaximo
-        );
+    fuenteBusqueda =
+      'SEACE_LOCAL_IMPORT';
 
-      fuenteBusqueda =
-        'SEACE_BROWSERLESS';
+    warning =
+      `Se analizaron ${crudas.length} oportunidades reales importadas desde SEACE` +
+      (
+        SEACE_STORE.importedAt
+          ? ` (última importación: ${SEACE_STORE.importedAt})`
+          : ''
+      ) +
+      '.';
 
-      console.log(
-        `[AG02] SEACE devolvió ${crudas.length} oportunidades únicas.`
-      );
-
-    } catch (err) {
-      console.error(
-        '[AG02] Falló SEACE/Browserless:',
-        err
-      );
-
-      warning =
-        `No se pudo consultar SEACE mediante Browserless: ${err.message}`;
-    }
+    console.log(
+      `[AG02] Usando ${crudas.length} oportunidades reales importadas desde SEACE.`
+    );
   }
+
+  // -------------------------------------------------------
+  // 2. RESPALDO: OpenAI web_search si todavía no hay SEACE
+  // -------------------------------------------------------
 
   if (
     crudas.length === 0 &&
     !DEMO_MODE
   ) {
     try {
-      console.log(
-        '[AG02] Usando OpenAI web_search como respaldo...'
-      );
-
       const prompt =
         buildOportunidadesPrompt(
           perfil,
           loteMaximo
         );
+
+      console.log(
+        '[AG02] No hay datos SEACE importados; usando OpenAI web_search como respaldo.'
+      );
 
       const aiResult =
         await callOpenAIJson(
@@ -919,7 +509,10 @@ async function handleOportunidades(body) {
       ) {
         crudas =
           aiResult.oportunidades
-            .slice(0, loteMaximo * 2)
+            .slice(
+              0,
+              loteMaximo * 2
+            )
             .map(
               (op, i) =>
                 normalizeAiOportunidad(
@@ -929,18 +522,17 @@ async function handleOportunidades(body) {
             );
 
         fuenteBusqueda =
-          'OPENAI_WEB';
+          'OPENAI_WEB_FALLBACK';
       }
 
     } catch (err) {
       console.error(
-        '[AG02] Falló búsqueda de respaldo:',
+        '[AG02] Falló la búsqueda de respaldo:',
         err
       );
 
-      warning = warning
-        ? `${warning} | OpenAI: ${err.message}`
-        : `No se pudo consultar OpenAI: ${err.message}`;
+      warning =
+        `Todavía no hay una importación SEACE disponible y la búsqueda de respaldo falló: ${err.message}`;
     }
   }
 
@@ -948,12 +540,15 @@ async function handleOportunidades(body) {
     return {
       oportunidades: [],
       descartadas: [],
-      demoMode: false,
+      demoMode: DEMO_MODE,
       fuenteBusqueda:
-        fuenteBusqueda || 'SIN_RESULTADOS',
+        fuenteBusqueda ||
+        'SIN_DATOS_SEACE',
+      totalSeaceImportado: 0,
+      seaceImportedAt: null,
       warning:
         warning ||
-        'No se encontraron oportunidades utilizables.'
+        'Todavía no se han recibido oportunidades desde el agente local SEACE.'
     };
   }
 
@@ -999,9 +594,19 @@ async function handleOportunidades(body) {
   return {
     oportunidades:
       enviables,
+
     descartadas,
+
     demoMode: false,
+
     fuenteBusqueda,
+
+    totalSeaceImportado:
+      SEACE_STORE.oportunidades.length,
+
+    seaceImportedAt:
+      SEACE_STORE.importedAt,
+
     warning
   };
 }
@@ -1350,7 +955,7 @@ function readJsonBody(req) {
     let size = 0;
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > 2_000_000) {
+      if (size > 10_000_000) {
         reject(new Error('payload demasiado grande'));
         req.destroy();
         return;
@@ -1407,8 +1012,9 @@ const server = http.createServer(async (req, res) => {
         version: AGENT_VERSION,
         demoMode: DEMO_MODE,
         model: DEMO_MODE ? null : OPENAI_MODEL,
-        browserlessConfigured: Boolean(BROWSERLESS_TOKEN),
-        seaceYear: SEACE_YEAR
+        seaceImportConfigured: Boolean(SEACE_IMPORT_TOKEN),
+        seaceTotal: SEACE_STORE.oportunidades.length,
+        seaceImportedAt: SEACE_STORE.importedAt
       });
     }
 
@@ -1444,6 +1050,182 @@ const server = http.createServer(async (req, res) => {
           error: err.message
         });
       }
+    }
+
+
+
+    // ---------------------------------------------------------
+    // IMPORTACIÓN SEGURA DESDE EL AGENTE LOCAL SEACE
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'POST' &&
+      pathname === '/api/seace/import'
+    ) {
+      if (!SEACE_IMPORT_TOKEN) {
+        return sendJson(
+          res,
+          503,
+          {
+            ok: false,
+            error:
+              'SEACE_IMPORT_TOKEN no está configurado en Render.'
+          }
+        );
+      }
+
+      if (
+        !validarTokenImportacionSEACE(
+          req
+        )
+      ) {
+        return sendJson(
+          res,
+          401,
+          {
+            ok: false,
+            error:
+              'Token de importación SEACE inválido.'
+          }
+        );
+      }
+
+      const body =
+        await readJsonBody(req);
+
+      const recibidas =
+        Array.isArray(
+          body.oportunidades
+        )
+          ? body.oportunidades
+          : [];
+
+      if (
+        recibidas.length === 0
+      ) {
+        return sendJson(
+          res,
+          400,
+          {
+            ok: false,
+            error:
+              'El payload no contiene oportunidades.'
+          }
+        );
+      }
+
+      if (
+        recibidas.length > 5000
+      ) {
+        return sendJson(
+          res,
+          413,
+          {
+            ok: false,
+            error:
+              'Se recibieron demasiadas oportunidades en una sola importación.'
+          }
+        );
+      }
+
+      const normalizadas =
+        recibidas.map(
+          (op, i) =>
+            normalizarOportunidadImportadaSEACE(
+              op,
+              i
+            )
+        );
+
+      const unicas =
+        dedupeOportunidades(
+          normalizadas
+        );
+
+      SEACE_STORE.oportunidades =
+        unicas;
+
+      SEACE_STORE.importedAt =
+        new Date().toISOString();
+
+      SEACE_STORE.generatedAt =
+        body.generatedAt ||
+        null;
+
+      SEACE_STORE.source =
+        body.source ||
+        'SEACE_LOCAL_AGENT';
+
+      SEACE_STORE.year =
+        body.year ||
+        null;
+
+      SEACE_STORE.keywords =
+        Array.isArray(
+          body.keywords
+        )
+          ? body.keywords
+          : [];
+
+      guardarCacheSEACE();
+
+      console.log(
+        `[SEACE IMPORT] ${unicas.length} oportunidades almacenadas.`
+      );
+
+      return sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          importedAt:
+            SEACE_STORE.importedAt,
+          generatedAt:
+            SEACE_STORE.generatedAt,
+          source:
+            SEACE_STORE.source,
+          year:
+            SEACE_STORE.year,
+          keywords:
+            SEACE_STORE.keywords,
+          total:
+            SEACE_STORE.oportunidades.length
+        }
+      );
+    }
+
+
+    // ---------------------------------------------------------
+    // ESTADO DE LA ÚLTIMA IMPORTACIÓN SEACE
+    // ---------------------------------------------------------
+
+    if (
+      req.method === 'GET' &&
+      pathname === '/api/seace/status'
+    ) {
+      return sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          importTokenConfigured:
+            Boolean(
+              SEACE_IMPORT_TOKEN
+            ),
+          importedAt:
+            SEACE_STORE.importedAt,
+          generatedAt:
+            SEACE_STORE.generatedAt,
+          source:
+            SEACE_STORE.source,
+          year:
+            SEACE_STORE.year,
+          keywords:
+            SEACE_STORE.keywords,
+          total:
+            SEACE_STORE.oportunidades.length
+        }
+      );
     }
 
 

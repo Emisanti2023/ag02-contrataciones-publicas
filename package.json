@@ -2,15 +2,12 @@
   "name": "prospector-ai-agente-02",
   "version": "0.4.0",
   "private": true,
-  "description": "Agente 02 - Prospección de Contrataciones Públicas del Perú",
+  "description": "AG02 - Prospección de Contrataciones Públicas del Perú",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
     "node": "24.x"
-  },
-  "dependencies": {
-    "playwright-core": "^1.55.0"
   }
 }
