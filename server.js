@@ -233,41 +233,103 @@ function demoOportunidades() {
 
 async function handleOportunidades(body) {
   const perfil = body.perfil || {};
-  const loteMaximo = Math.min(Math.max(Number(perfil.loteMaximo) || 10, 1), 20);
+  const loteMaximo = Math.min(
+    Math.max(Number(perfil.loteMaximo) || 10, 1),
+    20
+  );
 
-  let crudas;
-  let demoMode = DEMO_MODE;
+  let crudas = [];
   let warning = null;
 
-  if (!DEMO_MODE) {
-    try {
-      const prompt = buildOportunidadesPrompt(perfil, loteMaximo);
-      const aiResult = await callOpenAIJson(prompt, { webSearch: true });
-      if (Array.isArray(aiResult && aiResult.oportunidades) && aiResult.oportunidades.length > 0) {
-        crudas = aiResult.oportunidades.slice(0, loteMaximo * 2).map((op, i) => normalizeAiOportunidad(op, i));
-      } else {
-        warning = 'OpenAI no devolvió oportunidades utilizables; se muestra el lote de demostración.';
-        crudas = demoOportunidades();
-        demoMode = true;
-      }
-    } catch (err) {
-      warning = `No se pudo consultar OpenAI (${err.message}); se muestra el lote de demostración.`;
-      crudas = demoOportunidades();
-      demoMode = true;
-    }
-  } else {
-    crudas = demoOportunidades();
+  // En producción NO se generan oportunidades ficticias
+  if (DEMO_MODE) {
+    return {
+      oportunidades: [],
+      descartadas: [],
+      demoMode: true,
+      warning: 'No hay una OPENAI_API_KEY configurada. No se mostrarán oportunidades ficticias.'
+    };
   }
 
+  try {
+    const prompt = buildOportunidadesPrompt(perfil, loteMaximo);
+
+    console.log('[AG02] Iniciando búsqueda real de oportunidades...');
+
+    const aiResult = await callOpenAIJson(prompt, {
+      webSearch: true
+    });
+
+    if (
+      aiResult &&
+      Array.isArray(aiResult.oportunidades) &&
+      aiResult.oportunidades.length > 0
+    ) {
+
+      crudas = aiResult.oportunidades
+        .slice(0, loteMaximo * 2)
+        .map((op, i) => normalizeAiOportunidad(op, i));
+
+      console.log(
+        `[AG02] ${crudas.length} oportunidades reales recibidas.`
+      );
+
+    } else {
+
+      console.log('[AG02] La búsqueda no devolvió oportunidades.');
+
+      return {
+        oportunidades: [],
+        descartadas: [],
+        demoMode: false,
+        warning: 'La búsqueda finalizó correctamente, pero no se encontraron oportunidades reales que coincidan con el perfil.'
+      };
+    }
+
+  } catch (err) {
+
+    console.error(
+      '[AG02] Error realizando búsqueda real:',
+      err
+    );
+
+    return {
+      oportunidades: [],
+      descartadas: [],
+      demoMode: false,
+      warning: `No se pudo realizar la búsqueda real: ${err.message}`
+    };
+  }
+
+  // Eliminar oportunidades duplicadas
   crudas = dedupeOportunidades(crudas);
 
-  const scored = crudas.map(op => scoreOportunidad(perfil, op));
+  // Calcular score
+  const scored = crudas.map(op =>
+    scoreOportunidad(perfil, op)
+  );
+
   scored.sort((a, b) => b.score - a.score);
 
-  const enviables = scored.filter(op => op.prioridad !== 'DESCARTABLE').slice(0, loteMaximo);
-  const descartadas = scored.filter(op => op.prioridad === 'DESCARTABLE');
+  // Separar oportunidades relevantes y descartables
+  const enviables = scored
+    .filter(op => op.prioridad !== 'DESCARTABLE')
+    .slice(0, loteMaximo);
 
-  return { oportunidades: enviables, descartadas, demoMode, warning };
+  const descartadas = scored.filter(
+    op => op.prioridad === 'DESCARTABLE'
+  );
+
+  console.log(
+    `[AG02] Resultado final: ${enviables.length} oportunidades, ${descartadas.length} descartadas.`
+  );
+
+  return {
+    oportunidades: enviables,
+    descartadas,
+    demoMode: false,
+    warning
+  };
 }
 
 function buildOportunidadesPrompt(perfil, loteMaximo) {
