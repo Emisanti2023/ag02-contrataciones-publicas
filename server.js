@@ -81,6 +81,68 @@ function splitList(str) {
     .filter(Boolean);
 }
 
+
+async function probarConexionSEACE() {
+  let browser = null;
+
+  try {
+    console.log('[SEACE] Iniciando Chromium...');
+
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox'
+      ]
+    });
+
+    const context = await browser.newContext({
+      locale: 'es-PE',
+      viewport: {
+        width: 1600,
+        height: 1000
+      }
+    });
+
+    const page = await context.newPage();
+
+    page.setDefaultTimeout(60000);
+
+    console.log('[SEACE] Abriendo portal...');
+
+    const response = await page.goto(SEACE_PUBLIC_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
+
+    const title = await page.title();
+
+    const texto = await page.locator('body')
+      .innerText()
+      .catch(() => '');
+
+    const buscadorVisible =
+      texto.includes('Buscador de Procedimientos de Selección');
+
+    console.log('[SEACE] Portal cargado correctamente.');
+
+    return {
+      ok: true,
+      statusHttp: response ? response.status() : null,
+      titulo: title,
+      url: page.url(),
+      buscadorProcedimientosVisible: buscadorVisible
+    };
+
+  } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+}
+
+
+
 // ---------------------------------------------------------------------------
 // /api/perfil — estructura el perfil de empresa (equivalente al ICP del AG01)
 // ---------------------------------------------------------------------------
