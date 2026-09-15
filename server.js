@@ -786,6 +786,27 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && pathname === '/api/status') {
+
+if (
+  req.method === 'GET' &&
+  pathname === '/api/seace/ping'
+) {
+  try {
+    const resultado = await probarConexionSEACE();
+
+    return sendJson(res, 200, resultado);
+
+  } catch (err) {
+    console.error('[SEACE] Error de prueba:', err);
+
+    return sendJson(res, 500, {
+      ok: false,
+      error: err.message
+    });
+  }
+}
+
+      
       return sendJson(res, 200, {
         version: AGENT_VERSION,
         demoMode: DEMO_MODE,
