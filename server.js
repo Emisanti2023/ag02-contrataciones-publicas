@@ -20,7 +20,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 
 const ROOT = __dirname;
 const SEACE_PUBLIC_URL =
