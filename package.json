@@ -1,0 +1,13 @@
+{
+  "name": "prospector-ai-agente-02",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agente 02 - Prospección de Contrataciones Públicas del Perú: detección y priorización de oportunidades con validación humana.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

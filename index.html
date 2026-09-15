@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AG02 — Contrataciones Públicas</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AG02</div>
+        <div><strong>Contrataciones Públicas</strong><span>Agente 02 · v<span id="versionLabel">0.1</span></span></div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-view="dashboard"><span>⌂</span>Resumen</button>
+        <button class="nav-item" data-view="sprint"><span>◎</span>Nuevo perfil</button>
+        <button class="nav-item" data-view="leads"><span>◫</span>Oportunidades <b id="leadCountBadge">0</b></button>
+        <button class="nav-item" data-view="validation"><span>✓</span>Validación <b id="pendingBadge">0</b></button>
+        <button class="nav-item" data-view="learning"><span>↗</span>Aprendizaje</button>
+        <button class="nav-item" data-view="integrations"><span>⌘</span>Fuentes</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="human-chip"><span class="avatar">HN</span><div><small>Validador humano</small><input id="validatorNameSide" value="" /></div></div>
+        <small>Laboratorio de agentes comerciales IA</small>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">SECTOR PÚBLICO PERÚ · PROSPECCIÓN</div>
+          <h1 id="pageTitle">Prospección de Contrataciones Públicas</h1>
+        </div>
+        <div class="top-actions">
+          <span class="status-pill" id="apiStatus"><i></i>Comprobando…</span>
+          <button class="ghost" id="resetBtn">Reiniciar demo</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-dashboard">
+        <div class="hero-grid">
+          <div class="hero-card">
+            <div class="hero-number">02</div>
+            <div>
+              <span class="tag">AGENTE INDEPENDIENTE</span>
+              <h2>Detecta, estructura y prioriza oportunidades de SEACE, OECE, Perú Compras y más.</h2>
+              <p>Este agente solo detecta y prioriza. Nunca decide la participación: cada oportunidad pasa por validación humana antes de considerarse aprobada.</p>
+              <button class="primary" data-go="sprint">Definir perfil de empresa</button>
+            </div>
+          </div>
+          <div class="human-card">
+            <span class="tag soft">HUMAN-IN-THE-LOOP</span>
+            <h3>Validación obligatoria</h3>
+            <p>El humano evalúa relevancia, monto, cobertura, restricciones legales/técnicas y riesgos antes de participar.</p>
+            <div class="mini-flow"><span>IA</span><b>→</b><span>Oportunidad</span><b>→</b><span class="human">Humano</span><b>→</b><span>Aprendizaje</span></div>
+          </div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat"><small>Oportunidades encontradas</small><strong id="statLeads">0</strong><span>en el lote actual</span></div>
+          <div class="stat"><small>Pendientes</small><strong id="statPending">0</strong><span>por validar</span></div>
+          <div class="stat"><small>Aprobadas</small><strong id="statApproved">0</strong><span>por el humano</span></div>
+          <div class="stat"><small>Aceptación</small><strong id="statAcceptance">—</strong><span>tasa de aprobación</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div><span class="eyebrow">FLUJO DEL AGENTE</span><h3>Evidencia y recomendación, nunca decisión final</h3></div></div>
+          <div class="flowline">
+            <div class="flow-step done"><span>1</span><b>Definir perfil</b><small>Servicios, keywords, cobertura</small></div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step"><span>2</span><b>Buscar en fuentes oficiales</b><small>SEACE, OECE, Perú Compras…</small></div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step"><span>3</span><b>Extraer datos clave</b><small>Entidad, monto, fechas, alcance</small></div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step"><span>4</span><b>Score + prioridad</b><small>Con trazabilidad</small></div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step human-step"><span>5</span><b>Validar uno por uno</b><small>Decisión humana</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-sprint">
+        <div class="two-col">
+          <div class="panel form-panel">
+            <div class="panel-head"><div><span class="eyebrow">PERFIL DE EMPRESA</span><h3>Define qué buscar</h3></div><span class="step-chip">Paso 1 de 2</span></div>
+            <form id="icpForm">
+              <label>Perfil de la empresa<textarea name="perfilEmpresa" required placeholder="Ej. empresa de TI con 8 años de experiencia en el sector público, especializada en infraestructura y soporte…"></textarea></label>
+              <label>Servicios prioritarios <small>separados por coma</small><textarea name="servicios" required placeholder="Soporte técnico, desarrollo de software, consultoría TI, mantenimiento de infraestructura"></textarea></label>
+              <label>Palabras clave <small>separadas por coma</small><textarea name="keywords" placeholder="software, sistema, plataforma web, soporte técnico, infraestructura tecnológica"></textarea></label>
+              <label>Palabras excluidas <small>separadas por coma</small><textarea name="negativeKeywords" placeholder="obra civil, construcción de carreteras, catering"></textarea></label>
+              <div class="form-row">
+                <label>Cobertura geográfica <small>coma o "Nacional"</small><input name="regiones" placeholder="Lima, Arequipa" /></label>
+                <label>N.º de oportunidades por lote<input type="number" name="count" min="1" max="20" value="10" /></label>
+              </div>
+              <div class="form-row">
+                <label>Monto mínimo (S/)<input type="number" name="montoMinimo" min="0" placeholder="Ej. 20000" /></label>
+                <label>Monto máximo (S/)<input type="number" name="montoMaximo" min="0" placeholder="Ej. 1000000" /></label>
+              </div>
+              <label>Validador humano<input id="validatorName" name="validator" placeholder="Nombre de quien valida" /></label>
+              <button class="primary full" type="submit" id="buildIcpBtn">Estructurar perfil</button>
+            </form>
+          </div>
+
+          <div class="panel icp-preview">
+            <div class="panel-head"><div><span class="eyebrow">PERFIL GENERADO</span><h3>Vista previa</h3></div></div>
+            <div id="icpEmpty" class="empty-state"><div class="empty-icon">◎</div><h4>Aún no hay un perfil</h4><p>Completa el formulario. El agente lo estructurará y señalará preguntas o supuestos débiles.</p></div>
+            <div id="icpResult" class="hidden"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-leads">
+        <div class="panel">
+          <div class="panel-head leads-head">
+            <div><span class="eyebrow">RESULTADOS DE PROSPECCIÓN</span><h3>Oportunidades detectadas</h3></div>
+            <div class="inline-actions"><button class="ghost" id="exportBtn">Exportar CSV</button><button class="primary" id="prospectBtn">Buscar oportunidades</button></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Entidad</th><th>Objeto</th><th>Monto</th><th>Plazo</th><th>Score</th><th>Prioridad</th><th>Estado</th><th></th></tr></thead>
+              <tbody id="leadsTable"></tbody>
+            </table>
+            <div class="empty-state" id="leadsEmpty"><div class="empty-icon">◫</div><h4>No hay oportunidades todavía</h4><p>Define el perfil y ejecuta una búsqueda. Las oportunidades descartadas automáticamente (palabra excluida) no se muestran aquí.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-validation">
+        <div class="validation-layout">
+          <div class="panel validation-card" id="validationCard">
+            <div class="empty-state" id="validationEmpty"><div class="empty-icon">✓</div><h4>No hay oportunidades pendientes</h4><p>Las nuevas oportunidades aparecerán aquí para revisión individual.</p></div>
+            <div id="validationContent" class="hidden"></div>
+          </div>
+          <aside class="panel validation-side">
+            <span class="eyebrow">CONTROL HUMANO</span>
+            <h3>¿Qué debe validar?</h3>
+            <div class="check-guide"><span>01</span><div><b>Relevancia</b><small>¿Corresponde realmente a nuestros servicios?</small></div></div>
+            <div class="check-guide"><span>02</span><div><b>Monto</b><small>¿Está dentro de nuestra capacidad?</small></div></div>
+            <div class="check-guide"><span>03</span><div><b>Cobertura</b><small>¿Podemos operar en esa región?</small></div></div>
+            <div class="check-guide"><span>04</span><div><b>Restricciones</b><small>¿Cumplimos requisitos legales/técnicos?</small></div></div>
+            <div class="check-guide"><span>05</span><div><b>Riesgos</b><small>¿Hay señales de alerta en plazos o antecedentes?</small></div></div>
+            <div class="progress-box"><small>Progreso del lote</small><div class="progress"><i id="validationProgress"></i></div><strong id="progressText">0 / 0</strong></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-learning">
+        <div class="two-col learning-grid">
+          <div class="panel">
+            <div class="panel-head"><div><span class="eyebrow">APRENDIZAJE SUPERVISADO</span><h3>Reglas propuestas por el feedback</h3></div><button class="primary small" id="learnBtn">Analizar feedback</button></div>
+            <p class="muted">El agente puede proponer reglas, pero solo se incorporan cuando el humano las aprueba.</p>
+            <div id="proposedRules" class="rules-list"></div>
+            <div class="empty-state compact" id="rulesEmpty"><div class="empty-icon">↗</div><h4>Sin reglas propuestas</h4><p>Valida varias oportunidades y luego analiza el feedback.</p></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div><span class="eyebrow">MEMORIA OPERATIVA</span><h3>Reglas aprobadas</h3></div><span class="version-badge">v<span id="versionLearning">0.1</span></span></div>
+            <div id="approvedRules" class="rules-list"></div>
+            <div class="empty-state compact" id="approvedEmpty"><div class="empty-icon">＋</div><h4>Aún no hay reglas</h4><p>La versión 0.1 parte sin supuestos específicos del experto humano.</p></div>
+          </div>
+        </div>
+        <div class="stats-grid learning-stats">
+          <div class="stat"><small>Revisadas</small><strong id="metricReviewed">0</strong><span>oportunidades</span></div>
+          <div class="stat"><small>Relevancia correcta</small><strong id="metricCompany">—</strong><span>validación humana</span></div>
+          <div class="stat"><small>Monto correcto</small><strong id="metricTitle">—</strong><span>validación humana</span></div>
+          <div class="stat"><small>Haría seguimiento</small><strong id="metricContact">—</strong><span>utilidad comercial</span></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-integrations">
+        <div class="panel">
+          <div class="panel-head"><div><span class="eyebrow">FUENTES</span><h3>Fuentes prioritarias del Agente 02</h3></div></div>
+          <div class="integration-list">
+            <div class="integration"><div class="integration-icon">AI</div><div><b>OpenAI Responses API + búsqueda web</b><small>Extracción de hechos crudos de oportunidades reales. El score se calcula localmente, nunca lo inventa el modelo.</small></div><span class="integration-state on" id="openaiState">Configuración</span></div>
+            <div class="integration"><div class="integration-icon">SE</div><div><b>SEACE</b><small>Sistema Electrónico de Contrataciones del Estado.</small></div><span class="integration-state">Fuente prioritaria</span></div>
+            <div class="integration"><div class="integration-icon">PC</div><div><b>Perú Compras / Lima Compras</b><small>Acuerdos marco y compras corporativas.</small></div><span class="integration-state">Fuente prioritaria</span></div>
+            <div class="integration"><div class="integration-icon">OE</div><div><b>OECE</b><small>Organismo Especializado en Contrataciones del Estado.</small></div><span class="integration-state">Fuente prioritaria</span></div>
+            <div class="integration"><div class="integration-icon">PL</div><div><b>PLADICOP / PAC</b><small>Programación anual de contrataciones — detección temprana antes de la convocatoria.</small></div><span class="integration-state">Fuente prioritaria</span></div>
+          </div>
+          <div class="note"><b>Principio del MVP:</b> el agente entrega evidencia y una recomendación priorizada (A/B/C/Descartable). La decisión de participar siempre es humana.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal hidden" id="reviewModal">
+    <div class="modal-box">
+      <div class="modal-head"><div><span class="eyebrow">FEEDBACK HUMANO</span><h3 id="reviewModalTitle">Corregir oportunidad</h3></div><button class="icon-btn" data-close-modal>×</button></div>
+      <form id="reviewForm">
+        <input type="hidden" name="decision" />
+        <label>Motivo<select name="reason" required>
+          <option value="">Selecciona…</option>
+          <option>Fuera de cobertura geográfica</option>
+          <option>Monto fuera de rango comercial</option>
+          <option>Servicio no compatible con la empresa</option>
+          <option>Restricción legal o técnica no cumplida</option>
+          <option>Entidad con riesgo/observaciones</option>
+          <option>Información desactualizada o insuficiente</option>
+          <option>Duplicado</option>
+          <option>Otro</option>
+        </select></label>
+        <label>Comentario<textarea name="comment" placeholder="¿Qué debería aprender el agente de este caso?"></textarea></label>
+        <div class="criteria-grid">
+          <label><span>Relevancia correcta</span><select name="relevancia_ok"><option value="true">Sí</option><option value="false">No</option></select></label>
+          <label><span>Monto correcto</span><select name="monto_ok"><option value="true">Sí</option><option value="false">No</option></select></label>
+          <label><span>¿Harías seguimiento?</span><select name="haria_seguimiento"><option value="true">Sí</option><option value="false">No</option></select></label>
+        </div>
+        <button class="primary full" type="submit">Guardar evaluación</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
