@@ -23,6 +23,8 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const ROOT = __dirname;
+const SEACE_PUBLIC_URL =
+  'https://prod2.seace.gob.pe/seacebus-uiwd-pub/buscadorPublico/buscadorPublico.xhtml';
 
 loadEnvFile(path.join(ROOT, '.env'));
 
