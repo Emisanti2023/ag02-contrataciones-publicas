@@ -4,6 +4,42 @@ const STORAGE_KEY = 'ag02Contrataciones:v1';
 
 const state = loadState();
 
+document.addEventListener('DOMContentLoaded', () => {
+  const countInput =
+    document.querySelector(
+      '[name="count"]'
+    );
+
+  if (countInput) {
+    countInput.setAttribute(
+      'min',
+      '1'
+    );
+
+    countInput.setAttribute(
+      'max',
+      '200'
+    );
+
+    countInput.setAttribute(
+      'step',
+      '1'
+    );
+
+    // Conserva el valor existente; solo corrige valores inválidos.
+    const current =
+      Number(countInput.value);
+
+    if (
+      !Number.isFinite(current) ||
+      current < 1
+    ) {
+      countInput.value = '50';
+    }
+  }
+});
+
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -222,8 +258,20 @@ $('#prospectBtn').addEventListener('click', async () => {
     saveState();
     renderLeadsTable();
     renderDashboardStats();
-    if (result.warning) toast(result.warning);
-    else toast(`${result.oportunidades.length} oportunidades listas para revisión (${state.descartadas.length} descartadas automáticamente).`);
+    const iaText =
+      Number(result.perfiladasPorIA || 0) > 0
+        ? ` · ${result.perfiladasPorIA} perfiladas con IA`
+        : '';
+
+    if (result.warning) {
+      toast(
+        `${result.oportunidades.length} oportunidades listas${iaText}. ${result.warning}`
+      );
+    } else {
+      toast(
+        `${result.oportunidades.length} oportunidades listas para revisión${iaText} (${state.descartadas.length} descartadas automáticamente).`
+      );
+    }
     goToView('leads');
   } catch (err) {
     toast(`Error buscando oportunidades: ${err.message}`);
@@ -264,11 +312,18 @@ function renderLeadsTable() {
     const plazo = dias == null ? 'NO_VERIFICADO' : (dias < 0 ? 'Vencido' : `${dias} día(s)`);
     return `
       <tr>
-        <td><div class="lead-name">${esc(op.entidad)}}</div><div class="lead-sub">${esc(op.region)} · ${esc(op.fuente)}</div></td>
+        <td><div class="lead-name">${esc(op.entidad)}${op.demo ? '<span class="demo-flag">DEMO</span>' : ''}</div><div class="lead-sub">${esc(op.region)} · ${esc(op.fuente)}</div></td>
         <td>${esc(op.objeto)}<div class="lead-sub">${esc(op.proceso)}</div></td>
         <td>${esc(formatMonto(op.monto))}</td>
         <td>${esc(plazo)}</td>
-        <td><span class="score-pill score-${cls}">${op.score}</span></td>
+        <td>
+          <span class="score-pill score-${cls}">${op.score}</span>
+          ${op.ia_perfilado ? `
+            <div class="lead-sub">
+              IA ${esc(op.ia_score)} · ${esc(op.ia_relevancia)}
+            </div>
+          ` : ''}
+        </td>
         <td><span class="score-pill score-${cls}">${esc(label)}</span></td>
         <td><span class="status-tag status-${estado}">${esc(estado)}</span></td>
         <td><button class="ghost" data-review="${esc(op.id)}">Revisar</button></td>
@@ -352,9 +407,9 @@ function renderValidation() {
   content.innerHTML = `
     <div class="lead-detail-head">
       <div>
-        <h3>${esc(op.entidad)}</h3>
+        <h3>${esc(op.entidad)}${op.demo ? '<span class="demo-flag">DEMO</span>' : ''}</h3>
         <p>${esc(op.proceso)} · ${esc(op.region)}</p>
-        <div class="lead-meta">Publicado: ${esc(op.fecha_publicacion)} · Plazo: ${esc(plazoTexto)} · Fuente: ${esc(op.fuente)}</div>
+        <div class="lead-meta">Publicado: ${esc(op.fecha_publicacion)} · Plazo: ${esc(plazoTexto)} · Fuente: ${esc(op.fuente)}${op.avisoDemo ? ` · ${esc(op.avisoDemo)}` : ''}</div>
       </div>
       <div class="score-box">
         <strong class="score-pill score-${cls}">${op.score}</strong>
@@ -379,6 +434,29 @@ function renderValidation() {
       <h4>Compatibilidad con el perfil</h4>
       <div class="detail-card">${esc(op.compatibilidad)}</div>
     </div>
+
+    ${op.ia_perfilado ? `
+      <div class="detail-block">
+        <h4>Perfilado con ChatGPT</h4>
+        <div class="detail-card">
+          <div><b>Afinidad IA:</b> ${esc(op.ia_score)}/100 · ${esc(op.ia_relevancia)}</div>
+          <div style="margin-top:8px"><b>Resumen:</b> ${esc(op.ia_resumen)}</div>
+          <div style="margin-top:8px"><b>Servicio detectado:</b> ${esc(op.ia_servicio_detectado)}</div>
+          <div style="margin-top:8px"><b>Acción sugerida:</b> ${esc(op.ia_accion_sugerida)}</div>
+          ${op.ia_motivos && op.ia_motivos.length ? `
+            <div style="margin-top:8px"><b>Motivos:</b></div>
+            ${op.ia_motivos.map(m => `<div>• ${esc(m)}</div>`).join('')}
+          ` : ''}
+          ${op.ia_alertas && op.ia_alertas.length ? `
+            <div style="margin-top:8px"><b>Alertas:</b></div>
+            ${op.ia_alertas.map(a => `<div>⚠ ${esc(a)}</div>`).join('')}
+          ` : ''}
+          <div class="lead-sub" style="margin-top:8px">
+            Análisis orientativo. La decisión final corresponde a la validación humana.
+          </div>
+        </div>
+      </div>
+    ` : ''}
 
     <div class="detail-block">
       <h4>Palabras clave detectadas</h4>

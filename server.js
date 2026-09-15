@@ -30,7 +30,22 @@ const PORT = Number(process.env.PORT) || 3001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const DEMO_MODE = !OPENAI_API_KEY;
-const AGENT_VERSION = '0.4-SEACE-LOCAL-WEB';
+const AGENT_VERSION = '0.5-SEACE-AI-PROFILE';
+
+const MAX_RESULTS = Math.min(
+  Math.max(Number(process.env.AG02_MAX_RESULTS) || 200, 51),
+  500
+);
+
+const AI_PROFILE_LIMIT = Math.min(
+  Math.max(Number(process.env.AG02_AI_PROFILE_LIMIT) || 100, 0),
+  200
+);
+
+const AI_PROFILE_BATCH_SIZE = Math.min(
+  Math.max(Number(process.env.AG02_AI_PROFILE_BATCH_SIZE) || 20, 5),
+  30
+);
 
 const SEACE_IMPORT_TOKEN = process.env.SEACE_IMPORT_TOKEN || '';
 const SEACE_CACHE_FILE = path.join(ROOT, 'seace-cache.json');
@@ -292,7 +307,7 @@ async function handlePerfil(body) {
   const regiones = splitList(body.regiones);
   const montoMinimo = body.montoMinimo !== '' && body.montoMinimo != null ? Number(body.montoMinimo) : null;
   const montoMaximo = body.montoMaximo !== '' && body.montoMaximo != null ? Number(body.montoMaximo) : null;
-  const loteMaximo = Math.min(Math.max(Number(body.count) || 10, 1), 20);
+  const loteMaximo = Math.min(Math.max(Number(body.count) || 50, 1), MAX_RESULTS);
   const validador = (body.validator || '').trim();
 
   const clarifyingQuestions = [];
@@ -433,15 +448,300 @@ function demoOportunidades() {
   }));
 }
 
+
+function perfilIaSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      resultados: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            ia_score: {
+              type: 'integer',
+              minimum: 0,
+              maximum: 100
+            },
+            ia_relevancia: {
+              type: 'string',
+              enum: ['ALTA', 'MEDIA', 'BAJA']
+            },
+            ia_resumen: { type: 'string' },
+            ia_servicio_detectado: { type: 'string' },
+            ia_motivos: {
+              type: 'array',
+              items: { type: 'string' }
+            },
+            ia_alertas: {
+              type: 'array',
+              items: { type: 'string' }
+            },
+            ia_accion_sugerida: {
+              type: 'string',
+              enum: [
+                'REVISAR_PRIORITARIO',
+                'REVISAR',
+                'DESCARTAR_SUGERIDO'
+              ]
+            }
+          },
+          required: [
+            'id',
+            'ia_score',
+            'ia_relevancia',
+            'ia_resumen',
+            'ia_servicio_detectado',
+            'ia_motivos',
+            'ia_alertas',
+            'ia_accion_sugerida'
+          ]
+        }
+      }
+    },
+    required: ['resultados']
+  };
+}
+
+
+async function callOpenAIStructured(
+  prompt,
+  schema,
+  name = 'ag02_structured'
+) {
+  if (!OPENAI_API_KEY) {
+    throw new Error(
+      'OPENAI_API_KEY no está configurada.'
+    );
+  }
+
+  const payload = {
+    model: OPENAI_MODEL,
+    input: prompt,
+    text: {
+      format: {
+        type: 'json_schema',
+        name,
+        strict: true,
+        schema
+      }
+    }
+  };
+
+  const res = await fetch(
+    'https://api.openai.com/v1/responses',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization:
+          `Bearer ${OPENAI_API_KEY}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  if (!res.ok) {
+    const text =
+      await res.text()
+        .catch(() => '');
+
+    throw new Error(
+      `OpenAI respondió ${res.status}: ${text.slice(0, 400)}`
+    );
+  }
+
+  const data = await res.json();
+  const text = extractOutputText(data);
+
+  if (!text) {
+    throw new Error(
+      'OpenAI no devolvió texto estructurado.'
+    );
+  }
+
+  return JSON.parse(text);
+}
+
+
+function buildAiProfilingPrompt(
+  perfil,
+  oportunidades
+) {
+  const compactas =
+    oportunidades.map(op => ({
+      id: op.id,
+      entidad: op.entidad,
+      region: op.region,
+      proceso: op.proceso,
+      objeto: op.objeto,
+      descripcion: op.descripcion,
+      monto: op.monto,
+      moneda: op.moneda,
+      fecha_publicacion:
+        op.fecha_publicacion,
+      fecha_limite:
+        op.fecha_limite,
+      keyword_busqueda:
+        op.keyword_busqueda,
+      version_seace:
+        op.version_seace,
+      score_deterministico:
+        op.score,
+      prioridad_deterministica:
+        op.prioridad
+    }));
+
+  return [
+    'Actúas como analista comercial del agente AG02 para contrataciones públicas del Perú.',
+    'Debes PERFILAR semánticamente oportunidades REALES ya extraídas de SEACE contra el perfil de empresa entregado.',
+    'No busques información externa en esta tarea.',
+    'No inventes requisitos, fechas, montos, experiencia ni condiciones que no estén en los datos.',
+    'Tu análisis es orientativo y NO reemplaza la validación humana.',
+    'Evalúa afinidad comercial, cercanía del objeto con servicios y keywords, posibles alertas y prioridad de revisión.',
+    'Si un dato falta, indícalo como alerta; no lo completes.',
+    'ia_score debe medir afinidad comercial con el perfil de 0 a 100.',
+    'ALTA: 70-100. MEDIA: 40-69. BAJA: 0-39.',
+    'DESCARTAR_SUGERIDO es solo una recomendación; nunca significa descarte automático.',
+    '',
+    `PERFIL EMPRESA: ${JSON.stringify(perfil)}`,
+    '',
+    `OPORTUNIDADES SEACE: ${JSON.stringify(compactas)}`
+  ].join('\n');
+}
+
+
+async function perfilarOportunidadesConIA(
+  perfil,
+  oportunidades
+) {
+  if (
+    DEMO_MODE ||
+    AI_PROFILE_LIMIT <= 0 ||
+    oportunidades.length === 0
+  ) {
+    return {
+      oportunidades,
+      perfiladas: 0,
+      warning: null
+    };
+  }
+
+  const candidatas =
+    oportunidades.slice(
+      0,
+      Math.min(
+        AI_PROFILE_LIMIT,
+        oportunidades.length
+      )
+    );
+
+  const mapa = new Map();
+  let warning = null;
+
+  for (
+    let i = 0;
+    i < candidatas.length;
+    i += AI_PROFILE_BATCH_SIZE
+  ) {
+    const batch =
+      candidatas.slice(
+        i,
+        i + AI_PROFILE_BATCH_SIZE
+      );
+
+    try {
+      console.log(
+        `[AG02 IA] Perfilando ${i + 1}-${i + batch.length} de ${candidatas.length}...`
+      );
+
+      const result =
+        await callOpenAIStructured(
+          buildAiProfilingPrompt(
+            perfil,
+            batch
+          ),
+          perfilIaSchema(),
+          'ag02_seace_profile'
+        );
+
+      for (
+        const item of
+        result.resultados || []
+      ) {
+        mapa.set(
+          item.id,
+          item
+        );
+      }
+
+    } catch (err) {
+      console.error(
+        '[AG02 IA] Error de perfilado:',
+        err
+      );
+
+      warning =
+        `El perfilado con IA fue parcial: ${err.message}`;
+
+      // El scoring determinístico sigue funcionando aunque un lote falle.
+    }
+  }
+
+  const enriquecidas =
+    oportunidades.map(op => {
+      const ia =
+        mapa.get(op.id);
+
+      if (!ia) {
+        return {
+          ...op,
+          ia_perfilado: false
+        };
+      }
+
+      return {
+        ...op,
+        ia_perfilado: true,
+        ia_score:
+          ia.ia_score,
+        ia_relevancia:
+          ia.ia_relevancia,
+        ia_resumen:
+          ia.ia_resumen,
+        ia_servicio_detectado:
+          ia.ia_servicio_detectado,
+        ia_motivos:
+          ia.ia_motivos,
+        ia_alertas:
+          ia.ia_alertas,
+        ia_accion_sugerida:
+          ia.ia_accion_sugerida
+      };
+    });
+
+  return {
+    oportunidades:
+      enriquecidas,
+    perfiladas:
+      mapa.size,
+    warning
+  };
+}
+
+
 async function handleOportunidades(body) {
   const perfil = body.perfil || {};
 
   const loteMaximo = Math.min(
     Math.max(
-      Number(perfil.loteMaximo) || 10,
+      Number(perfil.loteMaximo) || 50,
       1
     ),
-    20
+    MAX_RESULTS
   );
 
   let crudas = [];
@@ -568,17 +868,50 @@ async function handleOportunidades(body) {
       b.score - a.score
   );
 
+  const noDescartadas =
+    scored.filter(
+      op =>
+        op.prioridad !==
+        'DESCARTABLE'
+    );
+
+  // Primero se ordena de manera determinística y luego ChatGPT
+  // perfila semánticamente las mejores candidatas.
+  const iaResult =
+    await perfilarOportunidadesConIA(
+      perfil,
+      noDescartadas
+    );
+
+  const perfiladas =
+    iaResult.oportunidades;
+
+  // La IA NO descarta automáticamente. Solo agrega señal de relevancia.
+  perfiladas.sort(
+    (a, b) => {
+      const aiA =
+        a.ia_perfilado
+          ? a.ia_score
+          : -1;
+
+      const aiB =
+        b.ia_perfilado
+          ? b.ia_score
+          : -1;
+
+      if (aiA !== aiB) {
+        return aiB - aiA;
+      }
+
+      return b.score - a.score;
+    }
+  );
+
   const enviables =
-    scored
-      .filter(
-        op =>
-          op.prioridad !==
-          'DESCARTABLE'
-      )
-      .slice(
-        0,
-        loteMaximo
-      );
+    perfiladas.slice(
+      0,
+      loteMaximo
+    );
 
   const descartadas =
     scored.filter(
@@ -587,8 +920,17 @@ async function handleOportunidades(body) {
         'DESCARTABLE'
     );
 
+  const warnings =
+    [
+      warning,
+      iaResult.warning
+    ]
+      .filter(Boolean)
+      .join(' | ') ||
+      null;
+
   console.log(
-    `[AG02] Resultado final: ${enviables.length} oportunidades, ${descartadas.length} descartadas.`
+    `[AG02] Resultado final: ${enviables.length} oportunidades; ${iaResult.perfiladas} perfiladas con IA; ${descartadas.length} descartadas determinísticamente.`
   );
 
   return {
@@ -607,7 +949,17 @@ async function handleOportunidades(body) {
     seaceImportedAt:
       SEACE_STORE.importedAt,
 
-    warning
+    maxResultados:
+      MAX_RESULTS,
+
+    perfiladasPorIA:
+      iaResult.perfiladas,
+
+    aiProfileLimit:
+      AI_PROFILE_LIMIT,
+
+    warning:
+      warnings
   };
 }
 
@@ -1014,7 +1366,10 @@ const server = http.createServer(async (req, res) => {
         model: DEMO_MODE ? null : OPENAI_MODEL,
         seaceImportConfigured: Boolean(SEACE_IMPORT_TOKEN),
         seaceTotal: SEACE_STORE.oportunidades.length,
-        seaceImportedAt: SEACE_STORE.importedAt
+        seaceImportedAt: SEACE_STORE.importedAt,
+        maxResultados: MAX_RESULTS,
+        aiProfileLimit: AI_PROFILE_LIMIT,
+        aiProfileBatchSize: AI_PROFILE_BATCH_SIZE
       });
     }
 
